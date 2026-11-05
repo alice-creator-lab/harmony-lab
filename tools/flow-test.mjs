@@ -106,6 +106,18 @@ const custom = await evalJs(`JSON.stringify({state: window.__lab.state(), level:
 console.log('CUSTOM', custom);
 await evalJs(`localStorage.removeItem('hl-custom'); 'ok'`);
 
+/* 進階面板展開後的排版（含哼唱扒譜的按鈕與輸入框） */
+await evalJs(`document.querySelector('details').open = true; 'ok'`);
+await sleep(400);
+const adv = await evalJs(`JSON.stringify({
+  scrollW: document.documentElement.scrollWidth, innerW: window.innerWidth,
+  humBtnW: Math.round(document.getElementById('btnHum').getBoundingClientRect().width),
+  titleW: Math.round(document.getElementById('humTitle').getBoundingClientRect().width),
+  keyChips: document.querySelectorAll('#humKeyChips .chip').length,
+  harChips: document.querySelectorAll('#humHarChips .chip').length
+})`);
+console.log('ADVANCED', adv);
+
 if (shot) {
   const ss = await send('Page.captureScreenshot', {format: 'png', captureBeyondViewport: true});
   writeFileSync(shot, Buffer.from(ss.result.data, 'base64'));

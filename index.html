@@ -84,7 +84,7 @@
 <body>
 <header>
   <h1>和音練習室</h1>
-  <span class="ver" id="verTag">v2</span>
+  <span class="ver" id="verTag">v3</span>
 </header>
 <main>
   <section class="card">
@@ -143,7 +143,28 @@
         <label>顯示簡譜音級<small>在音條上標示數字形音級（1 至 7），方便對照。</small></label>
         <button class="sw on" id="swDeg" aria-label="顯示簡譜音級"></button>
       </div>
-      <div class="imp">
+      <div class="imp" style="border-top:1px solid var(--line);padding-top:12px">
+        <p style="margin:0 0 9px"><b>哼唱扒譜</b>：跟著四拍預備哼出八拍旋律，程式會寫成簡譜並自動生成和音聲部。任何一首歌都可以用這個方式加入，不必等別人寫譜。</p>
+        <div class="row">
+          <label>調<small>你哼唱的調；不確定可先用 C，程式會按這個調寫成簡譜。</small></label>
+          <div class="chips" id="humKeyChips"></div>
+        </div>
+        <div class="row">
+          <label>和音類型</label>
+          <div class="chips" id="humHarChips"></div>
+        </div>
+        <div class="row">
+          <label>曲目名稱<small>例如：富士山下 副歌。</small></label>
+          <input id="humTitle" type="text" placeholder="哼唱練習" maxlength="24"
+                 style="flex:1;min-width:150px;background:var(--card2);border:1px solid var(--line);border-radius:9px;padding:9px 11px;color:var(--ink);font-family:inherit;font-size:13.5px">
+        </div>
+        <div class="row" style="margin-top:2px">
+          <button class="chip" id="btnHum" style="background:var(--acc);border-color:var(--acc);color:#20160c;font-weight:800">錄八拍並辨識</button>
+          <button class="chip" id="btnHumSave" hidden>儲存為曲目</button>
+        </div>
+        <p class="imp" id="humOut"></p>
+      </div>
+      <div class="imp" style="border-top:1px solid var(--line);padding-top:12px">
         <p style="margin:0 0 6px"><b>匯入自訂曲目</b>：選擇一個 JSON 檔，便會加入曲目清單並儲存在本機。檔案格式見 README，最簡單的一個練習句如下：</p>
         <code>{"id":"mine","title":"我的練習","tempo":80,"tonic":"C","mode":"major","har":{"step":2,"dir":1},"lines":[{"deg":"3/1 5/1 6/1 5/1 3/2 1/2","lyr":"歌詞","chords":["C","G"]}]}</code>
         <div class="row" style="margin-top:10px">
@@ -161,7 +182,7 @@
 (() => {
 'use strict';
 
-const VERSION = 'hl-v2';
+const VERSION = 'v3';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
@@ -1121,6 +1142,194 @@ function importJSON(text) {
   return null;
 }
 
+
+/* ============================ 哼唱扒譜 ============================ */
+/* 使用者跟著拍子哼八拍，程式把音高分格成簡譜，並自動生成和音聲部。
+   這樣任何一首歌都可以自己「加」進練習清單，不必依賴別人寫好的譜。 */
+
+const HUM = { tonic: 60, mode: 'major', tempo: 80, beats: 8, step: 2, dir: 1, last: null };
+
+const KEY_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+function midiToDegToken(midi, tonic, mode) {
+  const scale = SCALE[mode];
+  const rel = midi - tonic;
+  const oct = Math.floor(rel / 12);
+  const pc = rel - oct * 12;
+  let best = 0, bestD = 99;
+  for (let i = 0; i < 7; i++) {
+    const d = Math.abs(scale[i] - pc);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  let alt = 0;
+  if (scale[best] - pc === 1) alt = -1;
+  else if (pc - scale[best] === 1) alt = 1;
+  const mark = oct > 0 ? "'".repeat(Math.min(2, oct)) : oct < 0 ? ','.repeat(Math.min(2, -oct)) : '';
+  return (alt < 0 ? 'b' : alt > 0 ? '#' : '') + (best + 1) + mark;
+}
+
+/* 以八分音符為格（每拍兩格）：逐格取音高中位數，再把相同音高合併成一粒音 */
+function transcribeHum(track, phraseStart, beats, beatSec, tonicIn, mode) {
+  const slotSec = beatSec / 2;
+  const slots = Math.round(beats * 2);
+  const cells = [];
+  for (let i = 0; i < slots; i++) {
+    const from = phraseStart + i * slotSec + slotSec * 0.16;
+    const to = phraseStart + (i + 1) * slotSec - slotSec * 0.16;
+    const vals = [];
+    let rmsSum = 0;
+    for (const s of track) if (s.t >= from && s.t <= to) { vals.push(s.midi); rmsSum += s.rms; }
+    if (vals.length < 2) { cells.push(null); continue; }
+    vals.sort((a, b) => a - b);
+    cells.push({midi: Math.round(vals[vals.length >> 1]), rms: rmsSum / vals.length});
+  }
+  /* 主音八度自動對齊到哼唱的音域，令簡譜主要落在 1 至 7 之間 */
+  let tonic = tonicIn;
+  const voiced = cells.filter(Boolean).map(c => c.midi).sort((a, b) => a - b);
+  if (voiced.length) {
+    const med = voiced[voiced.length >> 1];
+    while (med - tonic >= 12) tonic += 12;
+    while (med < tonic) tonic -= 12;
+  }
+  /* 同一個半音才合成一段；相鄰半音（例如 3 與 4）不可誤併 */
+  const runs = [];
+  for (const c of cells) {
+    if (!c) {
+      const last = runs[runs.length - 1];
+      if (last && last.rest) last.n++;
+      else runs.push({rest: true, n: 1});
+      continue;
+    }
+    const last = runs[runs.length - 1];
+    if (last && !last.rest && last.midi === c.midi) last.cells.push(c);
+    else runs.push({midi: c.midi, cells: [c]});
+  }
+  /* 同一段之內出現能量低谷 = 同一個音再唱一次，要切開，否則「3 3」會變成一粒長音 */
+  const tokens = [], preview = [];
+  let filled = 0;
+  for (const run of runs) {
+    if (run.rest) { const b = run.n * 0.5; tokens.push('0/' + b); filled += b; continue; }
+    const peak = run.cells.reduce((m, c) => Math.max(m, c.rms), 0);
+    const core = run.cells.map(c => c.rms >= peak * 0.7);
+    /* 只在「低谷後面還有同樣音高」時才切開；音尾的衰減不算重新唱一次 */
+    const pieces = [];
+    let i = 0;
+    while (i < run.cells.length) {
+      if (!core[i]) { i++; continue; }
+      let j = i;
+      while (j + 1 < run.cells.length) {
+        if (core[j + 1]) { j++; continue; }
+        if (j + 2 < run.cells.length && core[j + 2]) break;
+        j = run.cells.length - 1;
+        break;
+      }
+      pieces.push({from: i, to: j});
+      i = j + 1;
+    }
+    const deg = midiToDegToken(run.midi, tonic, mode);
+    for (const pc of pieces) {
+      const b = (pc.to - pc.from + 1) * 0.5;
+      tokens.push(deg + '/' + b);
+      preview.push(deg);
+      filled += b;
+    }
+  }
+  if (filled < beats) tokens.push('0/' + (beats - filled));
+  return {tokens, preview: preview.join(' '), count: preview.length, tonic};
+}
+
+function humToSong(notes, title) {
+  if (HUM.last && HUM.last.tonic) HUM.tonic = HUM.last.tonic;
+  const rootName = KEY_NAMES[HUM.tonic % 12];
+  const domName = KEY_NAMES[(HUM.tonic + 7) % 12];
+  const min = HUM.mode === 'minor';
+  return normalizeCustom({
+    id: 'hum-' + Date.now(),
+    title: title || '哼唱練習',
+    tempo: HUM.tempo,
+    tonic: HUM.tonic,
+    mode: HUM.mode,
+    har: {step: HUM.step, dir: HUM.dir},
+    lines: [{
+      deg: notes.join(' '),
+      lyr: '（自己哼唱的旋律）',
+      chords: [rootName + (min ? 'm' : ''), domName],
+    }],
+  });
+}
+
+function renderHumChips() {
+  const kb = $('humKeyChips'), hb = $('humHarChips');
+  kb.innerHTML = '';
+  [60, 62, 64, 65, 67, 69].forEach((tn) => {
+    const b = document.createElement('button');
+    b.className = 'chip' + (HUM.tonic === tn ? ' on' : '');
+    b.textContent = KEY_NAMES[tn % 12];
+    b.onclick = () => { HUM.tonic = tn; renderHumChips(); };
+    kb.appendChild(b);
+  });
+  hb.innerHTML = '';
+  [[2, 1, '三度上'], [2, -1, '三度下'], [4, 1, '五度上']].forEach(([st, dr, lb]) => {
+    const b = document.createElement('button');
+    b.className = 'chip' + (HUM.step === st && HUM.dir === dr ? ' on' : '');
+    b.textContent = lb;
+    b.onclick = () => { HUM.step = st; HUM.dir = dr; renderHumChips(); };
+    hb.appendChild(b);
+  });
+}
+
+async function doHum() {
+  if (S.playing) { stopAll(); return; }
+  await A.resume();
+  const out = $('humOut');
+  try { await REC.open(); }
+  catch (e) { out.innerHTML = '<span style="color:var(--bad)">無法開啟麥克風：' + (e && e.message ? e.message : e) + '</span>'; return; }
+  stopAll(true);
+  const beatSec = 60 / HUM.tempo;
+  const t0 = A.now() + 0.5;
+  const start = t0 + 4 * beatSec;
+  S.playing = true; S.phraseStart = start; A.playStart = start;
+  const ev = [];
+  for (let b = 0; b < 4; b++) ev.push({at: t0 + b * beatSec, run: (at) => playClick(at, b === 0)});
+  scheduleEvents(ev, start);
+  REC.start();
+  const live = setInterval(() => {
+    if (!S.playing) { clearInterval(live); return; }
+    const now = A.now();
+    out.textContent = now < start
+      ? '預備 ' + Math.ceil((start - now) / beatSec)
+      : '正在聽… 剩 ' + Math.max(0, (start + HUM.beats * beatSec - now) / beatSec).toFixed(1) + ' 拍';
+  }, 100);
+  pollUntil(start + HUM.beats * beatSec + 0.25, () => {
+    clearInterval(live);
+    const track = REC.stop();
+    S.playing = false;
+    if (S.raf) { cancelAnimationFrame(S.raf); S.raf = 0; }
+    const res = transcribeHum(track, start, HUM.beats, beatSec, HUM.tonic, HUM.mode);
+    HUM.last = res;
+    out.innerHTML = res.count
+      ? '辨識到 <b>' + res.count + '</b> 粒音：' + res.preview + '<br>確認無誤可按下面的按鈕儲存；不對就再錄一次。'
+      : '沒有辨識到音。請靠近麥克風、跟著四拍預備之後才開始哼。';
+    $('btnHumSave').hidden = !res.count;
+    setPhase('待開始');
+  });
+}
+
+function saveHum() {
+  if (!HUM.last || !HUM.last.count) return;
+  const song = humToSong(HUM.last.tokens, ($('humTitle').value || '').trim());
+  let store = [];
+  try { store = JSON.parse(localStorage.getItem(LS.custom) || '[]'); } catch (e) { store = []; }
+  store.push(song);
+  try { localStorage.setItem(LS.custom, JSON.stringify(store)); } catch (e) {}
+  S.songIdx = SONGS.length + store.length - 1;
+  S.lineIdx = 0;
+  renderAll(); saveSettings();
+  $('humOut').innerHTML = '已加入曲目「' + song.title + '」（' + HUM.last.count + ' 粒音）。上方已切換到該曲目，可以立即試聽和音。';
+  document.querySelector('details').open = false;
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
 /* ============================ 綁定事件 ============================ */
 
 function bind() {
@@ -1138,6 +1347,9 @@ function bind() {
   swHead.onclick = () => { S.head = !S.head; swHead.classList.toggle('on', S.head); saveSettings(); };
   swDeg.onclick = () => { S.showDeg = !S.showDeg; swDeg.classList.toggle('on', S.showDeg); saveSettings(); drawStatic(S.phraseScaled || S.phrase); drawLive(S.phraseScaled || S.phrase, -1); };
   $('tolRange').oninput = (e) => { S.tol = parseInt(e.target.value, 10); $('tolVal').textContent = S.tol; saveSettings(); };
+  $('btnHum').onclick = doHum;
+  $('btnHumSave').onclick = saveHum;
+  renderHumChips();
   $('fileIn').onchange = (e) => {
     const f = e.target.files && e.target.files[0];
     if (!f) return;
@@ -1162,6 +1374,7 @@ function boot() {
   $('verTag').textContent = VERSION;
   const q = new URLSearchParams(location.search);
   if (q.get('count') === '0') window.__labNoCount = true;
+  if (q.get('hum')) HUM.tempo = clamp(parseInt(q.get('hum'), 10) || 80, 40, 200);
   loadSettings();
   $('tolRange').value = String(S.tol);
   $('tolVal').textContent = String(S.tol);
@@ -1179,6 +1392,7 @@ function boot() {
     audio: () => ({queue: A.queue.length, sched: !!A.sched, osc: A.activeOsc.size}),
     result: () => S.lastRes || null,
     sing: doSing, listen: doListen, stop: () => stopAll(),
+    hum: doHum, humResult: () => HUM.last, saveHum: saveHum, humState: () => ({...HUM, last: null}),
     score: scorePhrase,
     phrase: () => S.phrase,
 

@@ -1,5 +1,5 @@
 /* 和音練習室 — 離線快取 */
-const VERSION = 'hl-v2';
+const VERSION = 'hl-v3';
 const SHELL = ['./', './index.html'];
 
 self.addEventListener('install', (e) => {

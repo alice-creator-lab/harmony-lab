@@ -12,6 +12,7 @@ const SONGS = eval(html.match(/const SONGS = (\[[\s\S]*?\n\];)/)[1].replace(/;$/
 const [songId, lineArg, leadArg, outArg, partArg] = process.argv.slice(2);
 const PART = partArg === 'mel' ? 'mel' : 'har';
 const SPEED = Number(process.argv[7] || 1);
+const GAP = Number(process.env.GAP || 0.94);   /* 音與音之間的留白比例：0.7 左右模擬「再唱一次」 */
 const song = SONGS.find(s => s.id === songId) || SONGS[0];
 const lineIdx = Number(lineArg ?? 0);
 const lead = Number(leadArg ?? 0);
@@ -63,7 +64,7 @@ const buf = new Float32Array(n);
 for (const nt of notes) {
   const hz = 440 * Math.pow(2, (nt.midi - 69) / 12);
   const n0 = Math.floor((lead + nt.start) * SR);
-  const n1 = Math.min(n, Math.floor((lead + nt.start + nt.dur * 0.94) * SR));
+  const n1 = Math.min(n, Math.floor((lead + nt.start + nt.dur * GAP) * SR));
   let ph = 0;
   for (let i = n0; i < n1; i++) {
     const tt = (i - n0) / SR;
