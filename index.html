@@ -823,7 +823,8 @@ function renderAll() {
   $('stCount').textContent = '0／' + S.phrase.har.length;
   setupCanvas(); drawStatic(S.phrase); drawLive(S.phrase, -1);
   $('btnSing').disabled = S.lineIdx < 0;
-  $('footHint').style.display = S.lineIdx < 0 ? 'block' : 'none';
+  $('footHint').innerHTML = (S.lineIdx < 0 ? '<b style="color:var(--warn)">「全曲」只供聆聽，評分請選擇單句。</b><br>' : '') +
+    '練習方法：先按「聽示範」聽和音部分，再按「跟我唱」，跟着四拍預備開始唱。評分期間請保持安靜的環境，手機麥克風對著口部約二十公分。';
 }
 
 function setPhase(txt) { S.phase = txt; $('stPhase').textContent = txt; }

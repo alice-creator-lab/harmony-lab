@@ -11,6 +11,7 @@ const SONGS = eval(html.match(/const SONGS = (\[[\s\S]*?\n\];)/)[1].replace(/;$/
 
 const [songId, lineArg, leadArg, outArg, partArg] = process.argv.slice(2);
 const PART = partArg === 'mel' ? 'mel' : 'har';
+const SPEED = Number(process.argv[7] || 1);
 const song = SONGS.find(s => s.id === songId) || SONGS[0];
 const lineIdx = Number(lineArg ?? 0);
 const lead = Number(leadArg ?? 0);
@@ -35,7 +36,7 @@ function degToNote(tok, tonic, mode) {
 /* 只取和音聲部（正是使用者要唱的那條線） */
 const ln = song.lines[lineIdx];
 const spec = ln.har || song.har;
-const beatSec = 60 / song.tempo;
+const beatSec = (60 / song.tempo) / SPEED;
 const notes = [];
 let t = 0;
 for (const tk of ln.deg.trim().split(/\s+/)) {

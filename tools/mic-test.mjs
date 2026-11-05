@@ -8,6 +8,9 @@ import { writeFileSync } from 'node:fs';
 
 const [wav, portArg, url, shot] = process.argv.slice(2);
 const PORT = Number(portArg || 9841);
+const SONG = Number(process.env.SONG || 0);
+const LINE = Number(process.env.LINE || 0);
+const SPEED = Number(process.env.SPEED || 1);
 const CHROME = `${homedir()}/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome`;
 
 const child = spawn(CHROME, [
@@ -78,8 +81,15 @@ const boot = await evalJs(`JSON.stringify({
 })`);
 console.log('BOOT', boot);
 
-/* 選第 1 句（index 1，全曲在 0） */
-await evalJs(`document.querySelectorAll('#lineChips .chip')[1].click(); 'ok'`);
+/* 依環境變數選曲目、句子與速度（句子 index 0 是全曲，故 +1） */
+await evalJs(`document.querySelectorAll('#songChips .chip')[${SONG}].click(); 'ok'`);
+await sleep(150);
+await evalJs(`document.querySelectorAll('#lineChips .chip')[${LINE + 1}].click(); 'ok'`);
+await sleep(150);
+if (SPEED !== 1) {
+  await evalJs(`[...document.querySelectorAll('#speedChips .chip')].find(b=>b.textContent.includes('${SPEED}')).click(); 'ok'`);
+  await sleep(150);
+}
 await sleep(200);
 
 const clicked = await evalJs(`document.getElementById('btnSing').click(); 'clicked'`);
