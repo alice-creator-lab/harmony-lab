@@ -161,7 +161,7 @@
 (() => {
 'use strict';
 
-const VERSION = 'v1';
+const VERSION = 'hl-v2';
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
@@ -320,10 +320,13 @@ const A = {
     const Ctx = window.AudioContext || window.webkitAudioContext;
     this.ctx = new Ctx();
     const comp = this.ctx.createDynamicsCompressor();
-    comp.threshold.value = -14; comp.knee.value = 12; comp.ratio.value = 3.2;
+    comp.threshold.value = -18; comp.knee.value = 18; comp.ratio.value = 2.4;
+    /* 抑制高頻沙沙聲；音色整體偏暖，避免長時間練習覺得刺耳 */
+    const tame = this.ctx.createBiquadFilter();
+    tame.type = 'lowpass'; tame.frequency.value = 5600; tame.Q.value = 0.4;
     this.master = this.ctx.createGain();
-    this.master.gain.value = 0.9;
-    this.master.connect(comp); comp.connect(this.ctx.destination);
+    this.master.gain.value = 0.6;
+    this.master.connect(tame); tame.connect(comp); comp.connect(this.ctx.destination);
     return this.ctx;
   },
   async resume() { this.ensure(); if (this.ctx.state !== 'running') { try { await this.ctx.resume(); } catch (e) {} } },
@@ -345,40 +348,48 @@ function envGain(t0, dur, atk, rel, peak) {
   return g;
 }
 
-/* 人聲質感的引導音：兩個鋸齒波加上共鳴濾波與抖音 */
+/* 溫和的引導音：以正弦為基底的合成波（無高頻諧波堆疊，不會刺耳） */
+function softWave(kind) {
+  /* 波形物件屬於某一個 AudioContext；離線算圖會換掉 A.ctx，故一同換快取 */
+  A.waves = (A.waves && A.waves.ctx === A.ctx) ? A.waves : {ctx: A.ctx};
+  if (A.waves[kind]) return A.waves[kind];
+  const n = 12;
+  const real = new Float32Array(n), imag = new Float32Array(n);
+  /* 只保留少量低次諧波：明亮聲部（和音）稍多一點，便於分辨兩個聲部 */
+  const table = kind === 'har' ? [0, 1, 0.20, 0.06, 0.02] : [0, 1, 0.30, 0.09, 0.025];
+  for (let k = 1; k < table.length; k++) imag[k] = table[k];
+  A.waves[kind] = A.ctx.createPeriodicWave(real, imag);
+  return A.waves[kind];
+}
+
 function singVoice(midi, t0, dur, gain, bright) {
   const ctx = A.ctx;
   const hz = 440 * Math.pow(2, (midi - 69) / 12);
-  const out = ctx.createGain();
-  out.connect(A.master);
   const shape = ctx.createBiquadFilter();
-  shape.type = 'lowpass'; shape.frequency.value = bright ? 5200 : 3000; shape.Q.value = 0.6;
-  const f1 = ctx.createBiquadFilter(); f1.type = 'peaking'; f1.frequency.value = 760; f1.gain.value = 8; f1.Q.value = 1.1;
-  const f2 = ctx.createBiquadFilter(); f2.type = 'peaking'; f2.frequency.value = 2100; f2.gain.value = 5; f2.Q.value = 1.4;
-  const g = envGain(t0, dur, 0.045, Math.min(0.14, dur * 0.4), gain);
-  out.connect(f1); f1.connect(f2); f2.connect(shape); shape.connect(g);
-  for (const det of [-5, 5]) {
-    const o = ctx.createOscillator();
-    o.type = 'sawtooth'; o.frequency.value = hz; o.detune.value = det;
-    const lfo = ctx.createOscillator(); lfo.frequency.value = 5.2;
-    const lg = ctx.createGain();
-    lg.gain.setValueAtTime(0, t0);
-    lg.gain.linearRampToValueAtTime(14, t0 + Math.min(0.22, dur * 0.5));
-    lfo.connect(lg); lg.connect(o.detune);
-    o.connect(out);
-    o.start(t0); lfo.start(t0);
-    o.stop(t0 + dur + 0.05); lfo.stop(t0 + dur + 0.05);
-    A.activeOsc.add(o); A.activeOsc.add(lfo);
-    o.onended = () => { A.activeOsc.delete(o); A.activeOsc.delete(lfo); };
-  }
+  shape.type = 'lowpass'; shape.frequency.value = bright ? 2600 : 1800; shape.Q.value = 0.4;
+  const g = envGain(t0, dur, 0.085, Math.min(0.2, dur * 0.45), gain);
+  shape.connect(g); g.connect(A.master);
+  const o = ctx.createOscillator();
+  o.setPeriodicWave(softWave(bright ? 'har' : 'mel'));
+  o.frequency.value = hz;
+  const lfo = ctx.createOscillator(); lfo.frequency.value = 4.6;
+  const lg = ctx.createGain();
+  lg.gain.setValueAtTime(0, t0);
+  lg.gain.linearRampToValueAtTime(9, t0 + Math.min(0.25, dur * 0.5));
+  lfo.connect(lg); lg.connect(o.detune);
+  o.connect(shape);
+  o.start(t0); lfo.start(t0);
+  o.stop(t0 + dur + 0.05); lfo.stop(t0 + dur + 0.05);
+  A.activeOsc.add(o); A.activeOsc.add(lfo);
+  o.onended = () => { A.activeOsc.delete(o); A.activeOsc.delete(lfo); };
 }
 
 /* 伴奏：低音、持續墊音、八分音符琶音 */
 function playBass(midi, t0, dur, gain) {
   const ctx = A.ctx, hz = 440 * Math.pow(2, (midi - 69) / 12);
-  const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = hz;
-  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420;
-  const g = envGain(t0, dur, 0.02, Math.min(0.18, dur * 0.5), gain);
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = hz;
+  const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 320;
+  const g = envGain(t0, dur, 0.04, Math.min(0.2, dur * 0.5), gain);
   o.connect(f); f.connect(g); g.connect(A.master);
   o.start(t0); o.stop(t0 + dur + 0.03);
   A.activeOsc.add(o); o.onended = () => A.activeOsc.delete(o);
@@ -388,9 +399,9 @@ function playPad(midis, t0, dur, gain) {
   const ctx = A.ctx;
   for (const m of midis) {
     const hz = 440 * Math.pow(2, (m - 69) / 12);
-    const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = hz;
-    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 900;
-    const g = envGain(t0, dur, 0.09, Math.min(0.3, dur * 0.4), gain);
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = hz;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700; f.Q.value = 0.5;
+    const g = envGain(t0, dur, 0.16, Math.min(0.34, dur * 0.45), gain);
     o.connect(f); f.connect(g); g.connect(A.master);
     o.start(t0); o.stop(t0 + dur + 0.03);
     A.activeOsc.add(o); o.onended = () => A.activeOsc.delete(o);
@@ -399,24 +410,24 @@ function playPad(midis, t0, dur, gain) {
 
 function playPluck(midi, t0, gain) {
   const ctx = A.ctx, hz = 440 * Math.pow(2, (midi - 69) / 12);
-  const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = hz;
+  const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = hz;
   const g = ctx.createGain();
   g.gain.setValueAtTime(0.0001, t0);
-  g.gain.linearRampToValueAtTime(gain, t0 + 0.008);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.26);
+  g.gain.linearRampToValueAtTime(gain, t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
   o.connect(g); g.connect(A.master);
-  o.start(t0); o.stop(t0 + 0.3);
+  o.start(t0); o.stop(t0 + 0.26);
   A.activeOsc.add(o); o.onended = () => A.activeOsc.delete(o);
 }
 
 function playClick(t0, accent) {
   const ctx = A.ctx;
-  const o = ctx.createOscillator(); o.type = 'square';
-  o.frequency.value = accent ? 1500 : 1050;
+  const o = ctx.createOscillator(); o.type = 'sine';
+  o.frequency.value = accent ? 880 : 660;
   const g = ctx.createGain();
   g.gain.setValueAtTime(0.0001, t0);
-  g.gain.linearRampToValueAtTime(accent ? 0.16 : 0.1, t0 + 0.004);
-  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.07);
+  g.gain.linearRampToValueAtTime(accent ? 0.09 : 0.06, t0 + 0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.075);
   o.connect(g); g.connect(A.master);
   o.start(t0); o.stop(t0 + 0.09);
   A.activeOsc.add(o); o.onended = () => A.activeOsc.delete(o);
@@ -444,21 +455,21 @@ function phraseEvents(phrase, t0, opts) {
   if (v.acc) {
     for (const ch of phrase.chords) {
       const vc = chordVoicing(ch.name, opts.tonic);
-      ev.push({at: t0 + ch.start, run: (at) => playBass(vc.bass, at, Math.min(ch.dur, 1.2), 0.16)});
-      ev.push({at: t0 + ch.start, run: (at) => playPad(vc.pad, at, ch.dur, 0.035)});
+      ev.push({at: t0 + ch.start, run: (at) => playBass(vc.bass, at, Math.min(ch.dur, 1.2), 0.14)});
+      ev.push({at: t0 + ch.start, run: (at) => playPad(vc.pad, at, ch.dur, 0.024)});
       const beats = Math.round(ch.dur / phrase.beatSec);
       for (let b = 0; b < beats * 2; b++) {
         const off = b * phrase.beatSec / 2;
         if (off >= ch.dur - 0.01) break;
-        const note = vc.pad[b % 3] + 12;
-        ev.push({at: t0 + ch.start + off, run: (at) => playPluck(note, at, 0.05)});
+        const note = vc.pad[b % 3];
+        ev.push({at: t0 + ch.start + off, run: (at) => playPluck(note, at, 0.03)});
       }
     }
   }
   if (v.mel) for (const n of phrase.mel)
-    ev.push({at: t0 + n.start, run: (at) => singVoice(n.midi, at, n.dur * 0.96, 0.15, false)});
+    ev.push({at: t0 + n.start, run: (at) => singVoice(n.midi, at, n.dur * 0.96, 0.18, false)});
   if (v.har) for (const n of phrase.har)
-    ev.push({at: t0 + n.start, run: (at) => singVoice(n.midi, at, n.dur * 0.96, 0.15, true)});
+    ev.push({at: t0 + n.start, run: (at) => singVoice(n.midi, at, n.dur * 0.96, 0.18, true)});
   return ev;
 }
 
@@ -707,6 +718,71 @@ function drawLive(phrase, t) {
     }
     c.stroke();
   }
+}
+
+
+/* ============================ 音色量測（診斷用） ============================ */
+/* 以 4096 點 FFT 量峰值、頻譜重心，以及 4 kHz 以上能量佔比 */
+
+function fftMag(re, im) {
+  const n = re.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let cr = 1, ci = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const ur = re[i + k], ui = im[i + k];
+        const vr = re[i + k + len / 2] * cr - im[i + k + len / 2] * ci;
+        const vi = re[i + k + len / 2] * ci + im[i + k + len / 2] * cr;
+        re[i + k] = ur + vr; im[i + k] = ui + vi;
+        re[i + k + len / 2] = ur - vr; im[i + k + len / 2] = ui - vi;
+        const ncr = cr * wr - ci * wi;
+        ci = cr * wi + ci * wr; cr = ncr;
+      }
+    }
+  }
+}
+
+function measureBuffer(x, sr) {
+  const N = 4096;
+  const acc = new Float64Array(N / 2);
+  const re = new Float64Array(N), im = new Float64Array(N);
+  let peak = 0, sumSq = 0;
+  for (let i = 0; i < x.length; i++) { const v = Math.abs(x[i]); if (v > peak) peak = v; sumSq += x[i] * x[i]; }
+  let frames = 0;
+  for (let start = 0; start + N <= x.length; start += N) {
+    let energy = 0;
+    for (let i = 0; i < N; i++) energy += x[start + i] * x[start + i];
+    if (energy / N < 1e-7) continue;
+    for (let i = 0; i < N; i++) {
+      const w = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (N - 1));
+      re[i] = x[start + i] * w; im[i] = 0;
+    }
+    fftMag(re, im);
+    for (let k = 0; k < N / 2; k++) acc[k] += re[k] * re[k] + im[k] * im[k];
+    frames++;
+  }
+  if (!frames) return {peak, rms: 0, centroid: 0, hf4k: 0};
+  let total = 0, weighted = 0, hf = 0;
+  for (let k = 1; k < N / 2; k++) {
+    const f = k * sr / N;
+    const p = acc[k];
+    total += p; weighted += p * f;
+    if (f >= 4000) hf += p;
+  }
+  return {
+    peak: +peak.toFixed(3),
+    rms: +Math.sqrt(sumSq / x.length).toFixed(4),
+    centroid: Math.round(weighted / Math.max(1e-12, total)),
+    hf4k: +(100 * hf / Math.max(1e-12, total)).toFixed(2),
+  };
 }
 
 /* ============================ 狀態與介面 ============================ */
@@ -1105,6 +1181,27 @@ function boot() {
     sing: doSing, listen: doListen, stop: () => stopAll(),
     score: scorePhrase,
     phrase: () => S.phrase,
+
+    /* 離線算圖：把整句渲染成緩衝，量峰值與高頻比例，用來比較音色刺耳程度 */
+    renderOffline: async (songIdx, lineIdx) => {
+      const sg = songsAll()[songIdx || 0];
+      const ph = buildPhrase(sg, lineIdx === undefined ? 0 : lineIdx);
+      const SR = 44100;
+      const off = new OfflineAudioContext(1, Math.ceil((ph.dur + 0.8) * SR), SR);
+      const prevCtx = A.ctx, prevMaster = A.master;
+      A.ctx = off;
+      const comp = off.createDynamicsCompressor();
+      comp.threshold.value = -18; comp.knee.value = 18; comp.ratio.value = 2.4;
+      const tame = off.createBiquadFilter();
+      tame.type = 'lowpass'; tame.frequency.value = 5600; tame.Q.value = 0.4;
+      const g = off.createGain(); g.gain.value = 0.6;
+      A.master = g; g.connect(tame); tame.connect(comp); comp.connect(off.destination);
+      const ev = phraseEvents(ph, 0.3, {voices: {acc: true, mel: true, har: true}, tonic: sg.tonic});
+      for (const e of ev) e.run(e.at);
+      const buf = await off.startRendering();
+      A.ctx = prevCtx; A.master = prevMaster;
+      return measureBuffer(buf.getChannelData(0), SR);
+    },
     track: () => REC.track.map(s => ({t: +(s.t - S.phraseStart).toFixed(3), midi: +s.midi.toFixed(3)})),
   };
   stopAll(true);
